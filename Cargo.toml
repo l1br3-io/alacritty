@@ -19,3 +19,10 @@ incremental = false
 [workspace.dependencies]
 toml = "0.9.2"
 toml_edit = "0.23.1"
+
+# alacritty_terminal's OSC 133;D passthrough implements a Handler method
+# that only exists in the dropterm vte fork; patch the workspace's vte so
+# this repo builds and tests standalone. Downstream workspaces apply their
+# own patch (or none) — this entry never escapes the workspace root.
+[patch.crates-io]
+vte = { git = "https://github.com/l1br3-io/vte", rev = "34af676e31a82048ee1ac0d80fd99bcf50f98861" }

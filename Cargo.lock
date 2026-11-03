@@ -2105,8 +2105,7 @@ dependencies = [
 [[package]]
 name = "vte"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
+source = "git+https://github.com/l1br3-io/vte?rev=34af676e31a82048ee1ac0d80fd99bcf50f98861#34af676e31a82048ee1ac0d80fd99bcf50f98861"
 dependencies = [
  "arrayvec",
  "bitflags 2.9.4",

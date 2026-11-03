@@ -1439,6 +1439,13 @@ impl<T: EventListener> Handler for Term<T> {
         self.event_proxy.send_event(Event::Bell);
     }
 
+    /// Semantic prompt zone finished; the final command's exit code.
+    #[inline]
+    fn semantic_prompt_exit(&mut self, exit_code: u32) {
+        trace!("PromptExit({exit_code})");
+        self.event_proxy.send_event(Event::PromptExit(exit_code));
+    }
+
     #[inline]
     fn substitute(&mut self) {
         trace!("[unimplemented] Substitute");
@@ -2508,7 +2515,9 @@ pub mod test {
 mod tests {
     use super::*;
 
+    use std::cell::RefCell;
     use std::mem;
+    use std::rc::Rc;
 
     use crate::event::VoidListener;
     use crate::grid::{Grid, Scroll};
@@ -3298,5 +3307,29 @@ mod tests {
         assert_eq!(version_number("0.1.2-dev"), 1_02);
         assert_eq!(version_number("1.2.3-dev"), 1_02_03);
         assert_eq!(version_number("999.99.99"), 9_99_99_99);
+    }
+
+    /// Records every event the term emits, behind an Rc so the test can
+    /// read the sink while the term owns the listener.
+    #[derive(Clone, Default)]
+    struct EventSink(Rc<RefCell<Vec<Event>>>);
+
+    impl EventListener for EventSink {
+        fn send_event(&self, event: Event) {
+            self.0.borrow_mut().push(event);
+        }
+    }
+
+    #[test]
+    fn semantic_prompt_exit_emits_event() {
+        let size = TermSize::new(5, 10);
+        let events = EventSink::default();
+        let mut term = Term::new(Config::default(), &size, events.clone());
+
+        term.semantic_prompt_exit(1);
+
+        let recorded = events.0.borrow();
+        assert_eq!(recorded.len(), 1);
+        assert!(matches!(recorded[0], Event::PromptExit(1)));
     }
 }
