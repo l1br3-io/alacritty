@@ -1446,6 +1446,13 @@ impl<T: EventListener> Handler for Term<T> {
         self.event_proxy.send_event(Event::PromptExit(exit_code));
     }
 
+    /// Current working directory reported by the shell (OSC 7).
+    #[inline]
+    fn current_directory(&mut self, url: String) {
+        trace!("CurrentDirectory({url})");
+        self.event_proxy.send_event(Event::CurrentDirectory(url));
+    }
+
     #[inline]
     fn substitute(&mut self) {
         trace!("[unimplemented] Substitute");
@@ -3331,5 +3338,18 @@ mod tests {
         let recorded = events.0.borrow();
         assert_eq!(recorded.len(), 1);
         assert!(matches!(recorded[0], Event::PromptExit(1)));
+    }
+
+    #[test]
+    fn current_directory_emits_event() {
+        let size = TermSize::new(5, 10);
+        let events = EventSink::default();
+        let mut term = Term::new(Config::default(), &size, events.clone());
+
+        term.current_directory("file://host/home".to_owned());
+
+        let recorded = events.0.borrow();
+        assert_eq!(recorded.len(), 1);
+        assert!(matches!(&recorded[0], Event::CurrentDirectory(url) if url == "file://host/home"));
     }
 }

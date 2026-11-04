@@ -59,6 +59,10 @@ pub enum Event {
     /// Semantic prompt zone finished; the final command's exit code
     /// (OSC 133;D shell integration).
     PromptExit(u32),
+
+    /// Current working directory reported by the shell (OSC 7); the
+    /// `file://` URL verbatim.
+    CurrentDirectory(String),
 }
 
 impl Debug for Event {
@@ -78,6 +82,7 @@ impl Debug for Event {
             Event::Exit => write!(f, "Exit"),
             Event::ChildExit(code) => write!(f, "ChildExit({code})"),
             Event::PromptExit(code) => write!(f, "PromptExit({code})"),
+            Event::CurrentDirectory(url) => write!(f, "CurrentDirectory({url})"),
         }
     }
 }
