@@ -1453,6 +1453,13 @@ impl<T: EventListener> Handler for Term<T> {
         self.event_proxy.send_event(Event::CurrentDirectory(url));
     }
 
+    /// Progress report from the running command (OSC 9;4).
+    #[inline]
+    fn progress_report(&mut self, state: u8, value: Option<u8>) {
+        trace!("ProgressReport({state}, {value:?})");
+        self.event_proxy.send_event(Event::ProgressReport(state, value));
+    }
+
     #[inline]
     fn substitute(&mut self) {
         trace!("[unimplemented] Substitute");
@@ -3351,5 +3358,18 @@ mod tests {
         let recorded = events.0.borrow();
         assert_eq!(recorded.len(), 1);
         assert!(matches!(&recorded[0], Event::CurrentDirectory(url) if url == "file://host/home"));
+    }
+
+    #[test]
+    fn progress_report_emits_event() {
+        let size = TermSize::new(5, 10);
+        let events = EventSink::default();
+        let mut term = Term::new(Config::default(), &size, events.clone());
+
+        term.progress_report(1, Some(42));
+
+        let recorded = events.0.borrow();
+        assert_eq!(recorded.len(), 1);
+        assert!(matches!(recorded[0], Event::ProgressReport(1, Some(42))));
     }
 }

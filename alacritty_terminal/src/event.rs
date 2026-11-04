@@ -63,6 +63,11 @@ pub enum Event {
     /// Current working directory reported by the shell (OSC 7); the
     /// `file://` URL verbatim.
     CurrentDirectory(String),
+
+    /// Progress report from the running command (OSC 9;4); the state
+    /// (0 remove, 1 in progress, 2 error, 3 indeterminate, 4 paused)
+    /// and the optional percent value 0–100.
+    ProgressReport(u8, Option<u8>),
 }
 
 impl Debug for Event {
@@ -83,6 +88,7 @@ impl Debug for Event {
             Event::ChildExit(code) => write!(f, "ChildExit({code})"),
             Event::PromptExit(code) => write!(f, "PromptExit({code})"),
             Event::CurrentDirectory(url) => write!(f, "CurrentDirectory({url})"),
+            Event::ProgressReport(state, value) => write!(f, "ProgressReport({state}, {value:?})"),
         }
     }
 }
