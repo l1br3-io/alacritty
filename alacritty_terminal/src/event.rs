@@ -68,6 +68,10 @@ pub enum Event {
     /// (0 remove, 1 in progress, 2 error, 3 indeterminate, 4 paused)
     /// and the optional percent value 0–100.
     ProgressReport(u8, Option<u8>),
+
+    /// Program status report (OSC 7501, Hashimoto's Program Status
+    /// Protocol); the body's `key=value[:key=value…]` pairs verbatim.
+    ProgramStatus(String),
 }
 
 impl Debug for Event {
@@ -89,6 +93,7 @@ impl Debug for Event {
             Event::PromptExit(code) => write!(f, "PromptExit({code})"),
             Event::CurrentDirectory(url) => write!(f, "CurrentDirectory({url})"),
             Event::ProgressReport(state, value) => write!(f, "ProgressReport({state}, {value:?})"),
+            Event::ProgramStatus(body) => write!(f, "ProgramStatus({body})"),
         }
     }
 }

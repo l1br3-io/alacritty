@@ -1460,6 +1460,13 @@ impl<T: EventListener> Handler for Term<T> {
         self.event_proxy.send_event(Event::ProgressReport(state, value));
     }
 
+    /// Program status report (OSC 7501).
+    #[inline]
+    fn program_status(&mut self, body: String) {
+        trace!("ProgramStatus({body})");
+        self.event_proxy.send_event(Event::ProgramStatus(body));
+    }
+
     #[inline]
     fn substitute(&mut self) {
         trace!("[unimplemented] Substitute");
@@ -3371,5 +3378,18 @@ mod tests {
         let recorded = events.0.borrow();
         assert_eq!(recorded.len(), 1);
         assert!(matches!(recorded[0], Event::ProgressReport(1, Some(42))));
+    }
+
+    #[test]
+    fn program_status_emits_event() {
+        let size = TermSize::new(5, 10);
+        let events = EventSink::default();
+        let mut term = Term::new(Config::default(), &size, events.clone());
+
+        term.program_status("state=working:progress=40".to_owned());
+
+        let recorded = events.0.borrow();
+        assert_eq!(recorded.len(), 1);
+        assert!(matches!(&recorded[0], Event::ProgramStatus(body) if body == "state=working:progress=40"));
     }
 }
