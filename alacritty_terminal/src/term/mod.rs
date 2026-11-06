@@ -1882,6 +1882,11 @@ impl<T: EventListener> Handler for Term<T> {
         self.mode.insert(TermMode::default());
 
         self.event_proxy.send_event(Event::CursorBlinkingChange);
+        // RIS is its own edge, not a cursor-blinking change: consumers
+        // with records tied to the screen (shell-integration reports)
+        // need an unambiguous signal, and CursorBlinkingChange fires
+        // from several unrelated sites.
+        self.event_proxy.send_event(Event::FullReset);
         self.mark_fully_damaged();
     }
 
@@ -3391,5 +3396,17 @@ mod tests {
         let recorded = events.0.borrow();
         assert_eq!(recorded.len(), 1);
         assert!(matches!(&recorded[0], Event::ProgramStatus(body) if body == "state=working:progress=40"));
+    }
+
+    #[test]
+    fn reset_state_emits_full_reset_event() {
+        let size = TermSize::new(5, 10);
+        let events = EventSink::default();
+        let mut term = Term::new(Config::default(), &size, events.clone());
+
+        term.reset_state();
+
+        let recorded = events.0.borrow();
+        assert!(recorded.iter().any(|event| matches!(event, Event::FullReset)));
     }
 }

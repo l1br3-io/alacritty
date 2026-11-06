@@ -72,6 +72,10 @@ pub enum Event {
     /// Program status report (OSC 7501, Hashimoto's Program Status
     /// Protocol); the body's `key=value[:key=value…]` pairs verbatim.
     ProgramStatus(String),
+
+    /// The terminal was fully reset (RIS, `ESC c`); every
+    /// shell-integration report dies with the screen.
+    FullReset,
 }
 
 impl Debug for Event {
@@ -94,6 +98,7 @@ impl Debug for Event {
             Event::CurrentDirectory(url) => write!(f, "CurrentDirectory({url})"),
             Event::ProgressReport(state, value) => write!(f, "ProgressReport({state}, {value:?})"),
             Event::ProgramStatus(body) => write!(f, "ProgramStatus({body})"),
+            Event::FullReset => write!(f, "FullReset"),
         }
     }
 }
