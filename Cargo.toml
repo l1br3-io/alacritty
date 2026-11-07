@@ -25,4 +25,4 @@ toml_edit = "0.23.1"
 # this repo builds and tests standalone. Downstream workspaces apply their
 # own patch (or none) — this entry never escapes the workspace root.
 [patch.crates-io]
-vte = { git = "https://github.com/l1br3-io/vte", rev = "de166da2a66ce19605ce00bd9a5e7e8caf823bb5" }
+vte = { git = "https://github.com/l1br3-io/vte", rev = "52dadb7b7ccc0429439c662490bd603824bd35c0" }

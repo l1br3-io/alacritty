@@ -843,6 +843,35 @@ impl<T> Term<T> {
         self.mark_fully_damaged();
     }
 
+    /// Clear image placements from the grid (kitty graphics deletion).
+    ///
+    /// `Some(id)` clears only that image's cells, `None` clears every
+    /// image's; `visible_only` limits the sweep to the visible screen,
+    /// leaving scrollback placements standing. The pixels stay in the
+    /// consumer's store either way — freeing them is the consumer's
+    /// call, not the sweep's.
+    pub fn clear_images(&mut self, id: Option<u64>, visible_only: bool) {
+        trace!("Clearing images ({id:?}, visible only: {visible_only})");
+
+        let top = if visible_only { Line(0) } else { self.grid.topmost_line() };
+        let bottom = self.grid.bottommost_line();
+        let mut cleared = false;
+        for line in top.0..=bottom.0 {
+            for column in 0..self.columns() {
+                let cell = &mut self.grid[Line(line)][Column(column)];
+                if let Some(image) = cell.image()
+                    && id.is_none_or(|wanted| wanted == image.image)
+                {
+                    cell.set_image(None);
+                    cleared = true;
+                }
+            }
+        }
+        if cleared {
+            self.mark_fully_damaged();
+        }
+    }
+
     fn deccolm(&mut self)
     where
         T: EventListener,
@@ -1529,6 +1558,15 @@ impl<T: EventListener> Handler for Term<T> {
         trace!("InlineImage({} params)", params.len());
         let params = params.iter().map(|param| param.to_vec()).collect();
         self.event_proxy.send_event(Event::InlineImage(params));
+    }
+
+    /// APC string payload (kitty graphics protocol); the bytes
+    /// verbatim — the protocol check and every policy stay
+    /// consumer-side.
+    #[inline]
+    fn apc_payload(&mut self, payload: &[u8]) {
+        trace!("ApcPayload({} bytes)", payload.len());
+        self.event_proxy.send_event(Event::ApcPayload(payload.to_vec()));
     }
 
     #[inline]
@@ -3588,5 +3626,73 @@ mod tests {
 
         assert_eq!(term.grid[Line(0)][Column(0)].image(), None);
         assert_eq!(term.grid.cursor.point, Point::new(Line(0), Column(0)));
+    }
+
+    #[test]
+    fn apc_payload_emits_event() {
+        let size = TermSize::new(5, 10);
+        let events = EventSink::default();
+        let mut term = Term::new(Config::default(), &size, events.clone());
+
+        term.apc_payload(b"Ga=q");
+
+        let recorded = events.0.borrow();
+        assert_eq!(recorded.len(), 1);
+        assert!(matches!(&recorded[0], Event::ApcPayload(payload) if payload == b"Ga=q"));
+    }
+
+    #[test]
+    fn clear_images_removes_only_the_matching_image() {
+        let size = TermSize::new(5, 10);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        term.place_image(7, 1, 1);
+        term.grid.cursor.point = Point::new(Line(2), Column(2));
+        term.place_image(9, 1, 1);
+
+        term.clear_images(Some(7), false);
+
+        assert_eq!(term.grid[Line(0)][Column(0)].image(), None);
+        assert_eq!(
+            term.grid[Line(2)][Column(2)].image(),
+            Some(ImageCell { image: 9, x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 })
+        );
+    }
+
+    #[test]
+    fn clear_images_none_removes_every_image() {
+        let size = TermSize::new(5, 10);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        term.place_image(7, 1, 1);
+        term.grid.cursor.point = Point::new(Line(2), Column(2));
+        term.place_image(9, 1, 1);
+
+        term.clear_images(None, false);
+
+        assert_eq!(term.grid[Line(0)][Column(0)].image(), None);
+        assert_eq!(term.grid[Line(2)][Column(2)].image(), None);
+    }
+
+    #[test]
+    fn clear_images_visible_only_leaves_scrollback_standing() {
+        let size = TermSize::new(5, 10);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        // A taller-than-viewport placement rides its top into
+        // scrollback, fifteen rows of it.
+        term.place_image(7, 3, 25);
+        assert!(term.grid[Line(-15)][Column(0)].image().is_some());
+
+        term.clear_images(Some(7), true);
+
+        // The visible screen is swept...
+        assert_eq!(term.grid[Line(0)][Column(0)].image(), None);
+        assert_eq!(term.grid[Line(9)][Column(2)].image(), None);
+        // ...while the scrollback placement stands until the full sweep.
+        assert!(term.grid[Line(-15)][Column(0)].image().is_some());
+
+        term.clear_images(Some(7), false);
+        assert_eq!(term.grid[Line(-15)][Column(0)].image(), None);
     }
 }

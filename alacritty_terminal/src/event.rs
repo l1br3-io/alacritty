@@ -81,6 +81,11 @@ pub enum Event {
     /// parameter slices of the sequence body verbatim — the argument
     /// grammar and every policy stay consumer-side.
     InlineImage(Vec<Vec<u8>>),
+
+    /// APC string payload (kitty graphics protocol); the accumulated
+    /// bytes verbatim, introducer included — the protocol check and
+    /// every policy stay consumer-side.
+    ApcPayload(Vec<u8>),
 }
 
 impl Debug for Event {
@@ -107,6 +112,9 @@ impl Debug for Event {
             // Only the parameter count: a legacy single-shot sequence
             // carries the whole image payload in its parameters.
             Event::InlineImage(params) => write!(f, "InlineImage({} params)", params.len()),
+            // Only the byte count: a single payload carries the whole
+            // image.
+            Event::ApcPayload(payload) => write!(f, "ApcPayload({} bytes)", payload.len()),
         }
     }
 }
