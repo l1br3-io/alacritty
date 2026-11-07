@@ -115,18 +115,48 @@ impl ResetDiscriminant<Color> for Cell {
     }
 }
 
+/// A slice of an inline image covering this cell — the placement is diced
+/// per covered cell and rides the grid like text, so scrollback, reflow,
+/// and clearing are the grid's own bookkeeping.
+///
+/// The coordinates are normalized into the shared image; the consumer's
+/// store owns the pixels, keyed by `image`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct ImageCell {
+    /// Shared-image id the consumer's store resolves to pixels.
+    pub image: u64,
+    /// Normalized left edge of this cell's sub-rect.
+    pub x0: f32,
+    /// Normalized top edge of this cell's sub-rect.
+    pub y0: f32,
+    /// Normalized right edge of this cell's sub-rect.
+    pub x1: f32,
+    /// Normalized bottom edge of this cell's sub-rect.
+    pub y1: f32,
+}
+
+// The coordinates are always built from finite lengths by construction,
+// so equality is reflexive despite the floats.
+impl Eq for ImageCell {}
+
 /// Dynamically allocated cell content.
 ///
 /// This storage is reserved for cell attributes which are rarely set. This allows reducing the
 /// allocation required ahead of time for every cell, with some additional overhead when the extra
 /// storage is actually required.
-#[derive(Default, Debug, Clone, Eq, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct CellExtra {
     zerowidth: Vec<char>,
     underline_color: Option<Color>,
     hyperlink: Option<Hyperlink>,
+    image: Option<ImageCell>,
 }
+
+// Manual impl: the floats in `ImageCell` block the derive, and the
+// coordinates are finite by construction (see `ImageCell`).
+impl Eq for CellExtra {}
 
 /// Content and attributes of a single cell in the terminal grid.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -180,10 +210,9 @@ impl Cell {
     pub fn set_underline_color(&mut self, color: Option<Color>) {
         // If we reset color and we don't have zerowidth we should drop extra storage.
         if color.is_none()
-            && self
-                .extra
-                .as_ref()
-                .is_none_or(|extra| extra.zerowidth.is_empty() && extra.hyperlink.is_none())
+            && self.extra.as_ref().is_none_or(|extra| {
+                extra.zerowidth.is_empty() && extra.hyperlink.is_none() && extra.image.is_none()
+            })
         {
             self.extra = None;
         } else {
@@ -201,10 +230,11 @@ impl Cell {
     /// Set hyperlink.
     pub fn set_hyperlink(&mut self, hyperlink: Option<Hyperlink>) {
         let should_drop = hyperlink.is_none()
-            && self
-                .extra
-                .as_ref()
-                .is_none_or(|extra| extra.zerowidth.is_empty() && extra.underline_color.is_none());
+            && self.extra.as_ref().is_none_or(|extra| {
+                extra.zerowidth.is_empty()
+                    && extra.underline_color.is_none()
+                    && extra.image.is_none()
+            });
 
         if should_drop {
             self.extra = None;
@@ -218,6 +248,29 @@ impl Cell {
     #[inline]
     pub fn hyperlink(&self) -> Option<Hyperlink> {
         self.extra.as_ref()?.hyperlink.clone()
+    }
+
+    /// Set the inline-image slice covering this cell.
+    pub fn set_image(&mut self, image: Option<ImageCell>) {
+        let should_drop = image.is_none()
+            && self.extra.as_ref().is_none_or(|extra| {
+                extra.zerowidth.is_empty()
+                    && extra.underline_color.is_none()
+                    && extra.hyperlink.is_none()
+            });
+
+        if should_drop {
+            self.extra = None;
+        } else {
+            let extra = self.extra.get_or_insert(Default::default());
+            Arc::make_mut(extra).image = image;
+        }
+    }
+
+    /// Inline-image slice stored in this cell.
+    #[inline]
+    pub fn image(&self) -> Option<ImageCell> {
+        self.extra.as_ref()?.image
     }
 }
 
@@ -235,7 +288,10 @@ impl GridCell for Cell {
                     | Flags::WIDE_CHAR_SPACER
                     | Flags::LEADING_WIDE_CHAR_SPACER,
             )
-            && self.extra.as_ref().map(|extra| extra.zerowidth.is_empty()) != Some(false)
+            && self
+                .extra
+                .as_ref()
+                .is_none_or(|extra| extra.zerowidth.is_empty() && extra.image.is_none())
     }
 
     #[inline]
@@ -320,5 +376,39 @@ mod tests {
         row[Column(9)].flags.insert(super::Flags::WRAPLINE);
 
         assert_eq!(row.line_length(), Column(10));
+    }
+
+    #[test]
+    fn set_image_stores_and_clears_slice() {
+        let mut cell = Cell::default();
+        cell.set_image(Some(ImageCell { image: 1, x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 }));
+        assert_eq!(cell.image().map(|image| image.image), Some(1));
+
+        // Clearing the only resident drops the extra storage, exactly as
+        // clearing a lone hyperlink does.
+        cell.set_image(None);
+        assert_eq!(cell.extra, None);
+        assert_eq!(cell.image(), None);
+    }
+
+    #[test]
+    fn image_cell_counts_as_content() {
+        let mut cell = Cell::default();
+        assert!(cell.is_empty());
+
+        cell.set_image(Some(ImageCell { image: 1, x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 }));
+
+        assert!(!cell.is_empty());
+    }
+
+    #[test]
+    fn set_hyperlink_keeps_image_slice() {
+        let mut cell = Cell::default();
+        cell.set_image(Some(ImageCell { image: 1, x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 }));
+
+        // Resetting the unrelated hyperlink must not drop the image.
+        cell.set_hyperlink(None);
+
+        assert_eq!(cell.image().map(|image| image.image), Some(1));
     }
 }

@@ -76,6 +76,11 @@ pub enum Event {
     /// The terminal was fully reset (RIS, `ESC c`); every
     /// shell-integration report dies with the screen.
     FullReset,
+
+    /// Inline image (OSC 1337, iTerm2); the raw semicolon-split
+    /// parameter slices of the sequence body verbatim — the argument
+    /// grammar and every policy stay consumer-side.
+    InlineImage(Vec<Vec<u8>>),
 }
 
 impl Debug for Event {
@@ -99,6 +104,9 @@ impl Debug for Event {
             Event::ProgressReport(state, value) => write!(f, "ProgressReport({state}, {value:?})"),
             Event::ProgramStatus(body) => write!(f, "ProgramStatus({body})"),
             Event::FullReset => write!(f, "FullReset"),
+            // Only the parameter count: a legacy single-shot sequence
+            // carries the whole image payload in its parameters.
+            Event::InlineImage(params) => write!(f, "InlineImage({} params)", params.len()),
         }
     }
 }

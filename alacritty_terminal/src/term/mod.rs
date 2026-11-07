@@ -17,7 +17,7 @@ use crate::event::{Event, EventListener};
 use crate::grid::{Dimensions, Grid, GridIterator, Scroll};
 use crate::index::{self, Boundary, Column, Direction, Line, Point, Side};
 use crate::selection::{Selection, SelectionRange, SelectionType};
-use crate::term::cell::{Cell, Flags, LineLength};
+use crate::term::cell::{Cell, Flags, ImageCell, LineLength};
 use crate::term::color::Colors;
 use crate::vi_mode::{ViModeCursor, ViMotion};
 use crate::vte::ansi::{
@@ -789,6 +789,60 @@ impl<T> Term<T> {
         self.mark_fully_damaged();
     }
 
+    /// Place an inline image at the cursor, dicing it into one
+    /// [`ImageCell`] per covered grid cell (WezTerm's image-cell model).
+    ///
+    /// The image's pixels live consumer-side, keyed by `image_id`; each
+    /// covered cell carries its normalized sub-rect of the shared image,
+    /// so scrollback, reflow, and clearing behave exactly as they do for
+    /// text. A placement taller than the scroll region scrolls like
+    /// text — its top rides into scrollback — and a placement wider than
+    /// the remaining columns is cut off, as over-long text is. The
+    /// cursor is left on the line below the placement, where the
+    /// emitter's trailing newline is expected to land.
+    pub fn place_image(&mut self, image_id: u64, cols: usize, rows: usize) {
+        trace!("Placing image {image_id} at {:?} ({cols}x{rows})", self.grid.cursor.point);
+
+        let start = self.grid.cursor.point;
+        let width = self.columns() - start.column.0;
+        if cols == 0 || rows == 0 || width == 0 {
+            return;
+        }
+        self.grid.cursor.input_needs_wrap = false;
+
+        // Write one diced row at a time, advancing like a linefeed
+        // between rows: at the bottom of the scroll region the screen
+        // scrolls up instead of the cursor moving down, so a
+        // taller-than-viewport placement rides into scrollback exactly
+        // as text does. Columns past the grid's edge are cut off, not
+        // rescaled — each written cell carries its true fraction of the
+        // whole image.
+        let mut line = start.line;
+        for row in 0..rows {
+            let y0 = row as f32 / rows as f32;
+            let y1 = (row + 1) as f32 / rows as f32;
+            for col in 0..cmp::min(cols, width) {
+                let x0 = col as f32 / cols as f32;
+                let x1 = (col + 1) as f32 / cols as f32;
+                let cell = &mut self.grid[line][Column(start.column.0 + col)];
+                cell.set_image(Some(ImageCell { image: image_id, x0, y0, x1, y1 }));
+            }
+            if row + 1 < rows {
+                let next = line + 1;
+                if next == self.scroll_region.end {
+                    self.scroll_up_relative(self.scroll_region.start, 1);
+                } else if next < self.screen_lines() {
+                    line = next;
+                }
+            }
+        }
+
+        // Cursor below the placement, at the image's starting column.
+        let below = line + 1;
+        self.grid.cursor.point.line = cmp::min(below, self.scroll_region.end - 1);
+        self.mark_fully_damaged();
+    }
+
     fn deccolm(&mut self)
     where
         T: EventListener,
@@ -1465,6 +1519,16 @@ impl<T: EventListener> Handler for Term<T> {
     fn program_status(&mut self, body: String) {
         trace!("ProgramStatus({body})");
         self.event_proxy.send_event(Event::ProgramStatus(body));
+    }
+
+    /// Inline image (OSC 1337, iTerm2); the raw parameter slices
+    /// verbatim — the argument grammar and every policy stay
+    /// consumer-side.
+    #[inline]
+    fn iterm_inline_image(&mut self, params: &[&[u8]]) {
+        trace!("InlineImage({} params)", params.len());
+        let params = params.iter().map(|param| param.to_vec()).collect();
+        self.event_proxy.send_event(Event::InlineImage(params));
     }
 
     #[inline]
@@ -3395,7 +3459,9 @@ mod tests {
 
         let recorded = events.0.borrow();
         assert_eq!(recorded.len(), 1);
-        assert!(matches!(&recorded[0], Event::ProgramStatus(body) if body == "state=working:progress=40"));
+        assert!(
+            matches!(&recorded[0], Event::ProgramStatus(body) if body == "state=working:progress=40")
+        );
     }
 
     #[test]
@@ -3408,5 +3474,119 @@ mod tests {
 
         let recorded = events.0.borrow();
         assert!(recorded.iter().any(|event| matches!(event, Event::FullReset)));
+    }
+
+    #[test]
+    fn inline_image_emits_event() {
+        let size = TermSize::new(5, 10);
+        let events = EventSink::default();
+        let mut term = Term::new(Config::default(), &size, events.clone());
+
+        term.iterm_inline_image(&[
+            b"File=inline=1".as_slice(),
+            b"name=aGVsbG8:aGVsbG8=".as_slice(),
+        ]);
+
+        let recorded = events.0.borrow();
+        assert_eq!(recorded.len(), 1);
+        assert!(matches!(&recorded[0], Event::InlineImage(params)
+            if params == &vec![b"File=inline=1".to_vec(), b"name=aGVsbG8:aGVsbG8=".to_vec()]));
+    }
+
+    #[test]
+    fn place_image_dices_cells_at_cursor() {
+        let size = TermSize::new(5, 10);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        term.place_image(7, 2, 2);
+
+        // Each covered cell carries its normalized sub-rect of the image.
+        assert_eq!(
+            term.grid[Line(0)][Column(0)].image(),
+            Some(ImageCell { image: 7, x0: 0.0, y0: 0.0, x1: 0.5, y1: 0.5 })
+        );
+        assert_eq!(
+            term.grid[Line(0)][Column(1)].image(),
+            Some(ImageCell { image: 7, x0: 0.5, y0: 0.0, x1: 1.0, y1: 0.5 })
+        );
+        assert_eq!(
+            term.grid[Line(1)][Column(0)].image(),
+            Some(ImageCell { image: 7, x0: 0.0, y0: 0.5, x1: 0.5, y1: 1.0 })
+        );
+        assert_eq!(
+            term.grid[Line(1)][Column(1)].image(),
+            Some(ImageCell { image: 7, x0: 0.5, y0: 0.5, x1: 1.0, y1: 1.0 })
+        );
+
+        // Cells outside the placement are untouched.
+        assert_eq!(term.grid[Line(0)][Column(2)].image(), None);
+        assert_eq!(term.grid[Line(2)][Column(0)].image(), None);
+
+        // The cursor lands below the placement, at the image's column.
+        assert_eq!(term.grid.cursor.point, Point::new(Line(2), Column(0)));
+    }
+
+    #[test]
+    fn place_image_taller_than_viewport_scrolls() {
+        let size = TermSize::new(5, 10);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        term.place_image(7, 3, 25);
+
+        // The placement scrolled like text: fifteen rows' worth of
+        // scrollback grew, the image's head rides in it, and the
+        // bottom line carries the final row.
+        assert_eq!(term.total_lines(), 25);
+        assert_eq!(
+            term.grid[Line(-15)][Column(0)].image(),
+            Some(ImageCell { image: 7, x0: 0.0, y0: 0.0, x1: 1.0 / 3.0, y1: 1.0 / 25.0 })
+        );
+        assert_eq!(
+            term.grid[Line(0)][Column(0)].image(),
+            Some(ImageCell { image: 7, x0: 0.0, y0: 15.0 / 25.0, x1: 1.0 / 3.0, y1: 16.0 / 25.0 })
+        );
+        assert_eq!(
+            term.grid[Line(9)][Column(2)].image(),
+            Some(ImageCell { image: 7, x0: 2.0 / 3.0, y0: 24.0 / 25.0, x1: 1.0, y1: 1.0 })
+        );
+
+        // A line below the placement does not exist; the cursor stays on
+        // the bottom line, where the emitter's trailing newline is
+        // expected to land.
+        assert_eq!(term.grid.cursor.point, Point::new(Line(9), Column(0)));
+    }
+
+    #[test]
+    fn place_image_wider_than_remaining_columns_clamps() {
+        let size = TermSize::new(5, 10);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        term.grid.cursor.point = Point::new(Line(0), Column(3));
+
+        term.place_image(7, 4, 1);
+
+        // Only the remaining columns are covered; the image is cut off,
+        // not rescaled — the cells carry their true fractions of it.
+        assert_eq!(
+            term.grid[Line(0)][Column(3)].image(),
+            Some(ImageCell { image: 7, x0: 0.0, y0: 0.0, x1: 0.25, y1: 1.0 })
+        );
+        assert_eq!(
+            term.grid[Line(0)][Column(4)].image(),
+            Some(ImageCell { image: 7, x0: 0.25, y0: 0.0, x1: 0.5, y1: 1.0 })
+        );
+
+        assert_eq!(term.grid.cursor.point, Point::new(Line(1), Column(3)));
+    }
+
+    #[test]
+    fn place_image_zero_dimension_is_noop() {
+        let size = TermSize::new(5, 10);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        term.place_image(7, 0, 2);
+        term.place_image(7, 2, 0);
+
+        assert_eq!(term.grid[Line(0)][Column(0)].image(), None);
+        assert_eq!(term.grid.cursor.point, Point::new(Line(0), Column(0)));
     }
 }
