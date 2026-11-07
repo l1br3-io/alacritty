@@ -846,15 +846,21 @@ impl<T> Term<T> {
     /// Clear image placements from the grid (kitty graphics deletion).
     ///
     /// `Some(id)` clears only that image's cells, `None` clears every
-    /// image's; `visible_only` limits the sweep to the visible screen,
-    /// leaving scrollback placements standing. The pixels stay in the
+    /// image's; `visible_only` limits the sweep to the visible screen
+    /// — the rows the display offset currently shows, so a scrolled
+    /// viewport sweeps the scrollback it is looking at — leaving the
+    /// off-screen placements standing. The pixels stay in the
     /// consumer's store either way — freeing them is the consumer's
     /// call, not the sweep's.
     pub fn clear_images(&mut self, id: Option<u64>, visible_only: bool) {
         trace!("Clearing images ({id:?}, visible only: {visible_only})");
 
-        let top = if visible_only { Line(0) } else { self.grid.topmost_line() };
-        let bottom = self.grid.bottommost_line();
+        let (top, bottom) = if visible_only {
+            let top = Line(-(self.grid.display_offset() as i32));
+            (top, Line(top.0 + self.screen_lines() as i32 - 1))
+        } else {
+            (self.grid.topmost_line(), self.grid.bottommost_line())
+        };
         let mut cleared = false;
         for line in top.0..=bottom.0 {
             for column in 0..self.columns() {
@@ -3694,5 +3700,27 @@ mod tests {
 
         term.clear_images(Some(7), false);
         assert_eq!(term.grid[Line(-15)][Column(0)].image(), None);
+    }
+
+    #[test]
+    fn clear_images_visible_only_sweeps_what_the_offset_shows() {
+        let size = TermSize::new(5, 10);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        term.place_image(7, 3, 25);
+        // Scrolled fully back: the viewport shows the scrollback rows
+        // the placement's head rides in.
+        term.scroll_display(Scroll::Delta(15));
+        assert_eq!(term.grid.display_offset(), 15);
+
+        term.clear_images(Some(7), true);
+
+        // The shown rows are swept...
+        assert_eq!(term.grid[Line(-15)][Column(0)].image(), None);
+        assert_eq!(term.grid[Line(-6)][Column(0)].image(), None);
+        // ...while the off-screen bottom rows stand until they scroll
+        // back into view or the full sweep takes them.
+        assert!(term.grid[Line(5)][Column(0)].image().is_some());
+        assert!(term.grid[Line(9)][Column(2)].image().is_some());
     }
 }
